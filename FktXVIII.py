@@ -3,7 +3,7 @@ import numpy as np
 
 def assemble(elemat, elevec, sysmat, rhs, ele):
     """
-    Fkt. XVIII (Aufgabenblatt 7)
+    Fkt. XVIII (Aufgabenblatt 7)装配矩阵
 
     elemat : (nen,nen) element matrix A^(e)
     elevec : (nen,)    element vector f^(e)

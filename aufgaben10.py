@@ -1,4 +1,4 @@
-#E1
+# #E1
 # import numpy as np
 
 
@@ -100,602 +100,265 @@
 
 import numpy as np
 
-# =============== optional sparse solver (recommended) ===============
-try:
-    import scipy.sparse as sp
-    import scipy.sparse.linalg as spla
-    HAS_SCIPY = True
-except Exception:
-    HAS_SCIPY = False
-
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-
-def nid(i):
-    """Convert 1-based node id (as in the sheet) to 0-based index."""
-    return i - 1
-
-def nids(*args):
-    """Convert multiple 1-based node ids to 0-based indices."""
-    return [i - 1 for i in args]
+from linquadref import linquadref
+from linquadderivref import linquadderivref
+from getJacobian import getJacobian
+from gx2dref import gx2dref
+from gw2dref import gw2dref
+from assemble import assemble
+from assignDBC import assignDBC
+from Fkt_0 import plot_temperature_trisurf_interp
 
 
-# ============================================================
-#  Robust quad preprocessing (IMPORTANT FIX)
-# ============================================================
+# =========================================================
+# Problem parameters (given in sheet)
+# =========================================================
+lam = 48.0
+c1 = 1e6
+c2 = 1e3
 
-def fix_quad_order_by_angle(nodes, elem):
-    """
-    Reorder quad nodes into a non-self-intersecting CCW loop
-    by sorting nodes around the centroid.
-    """
-    elem = np.array(elem, dtype=int)
-    pts = nodes[elem, :]
-    c = pts.mean(axis=0)
-
-    ang = np.arctan2(pts[:, 1] - c[1], pts[:, 0] - c[0])
-    order = np.argsort(ang)  # CCW around centroid
-    elem2 = elem[order]
-
-    # Ensure CCW by signed area
-    x = nodes[elem2, 0]
-    y = nodes[elem2, 1]
-    area2 = np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
-    if area2 < 0:
-        elem2 = elem2[[0, 3, 2, 1]]
-
-    return elem2
-
-def is_self_intersecting_quad(nodes, elem):
-    """
-    Check if quad edges self-intersect (bow-tie quad).
-    Edges: 0-1,1-2,2-3,3-0
-    """
-    e = np.array(elem, dtype=int)
-    p = nodes[e, :]
-
-    def orient(u, v, w):
-        return (v[0]-u[0])*(w[1]-u[1]) - (v[1]-u[1])*(w[0]-u[0])
-
-    def seg_proper_intersect(a, b, c, d):
-        o1 = orient(a, b, c)
-        o2 = orient(a, b, d)
-        o3 = orient(c, d, a)
-        o4 = orient(c, d, b)
-        return (o1 * o2 < 0) and (o3 * o4 < 0)
-
-    # For a quad, self-intersection typically means (0-1) intersects (2-3) OR (1-2) intersects (3-0)
-    return seg_proper_intersect(p[0], p[1], p[2], p[3]) or seg_proper_intersect(p[1], p[2], p[3], p[0])
-
-def preprocess_elements(nodes, elements):
-    """
-    Apply robust reordering to all quads, and detect invalid (self-intersecting) quads.
-    """
-    fixed = []
-    for idx, e in enumerate(elements):
-        e2 = fix_quad_order_by_angle(nodes, e)
-
-        if is_self_intersecting_quad(nodes, e2):
-            print("\n=== BAD self-intersecting quad detected ===")
-            print("Element index (0-based in your list):", idx)
-            print("Original elem:", np.array(e, dtype=int))
-            print("Reordered:", e2)
-            print("Coords (reordered):\n", nodes[e2])
-            raise ValueError("Self-intersecting quad: you must FIX element connectivity near notch (cannot be solved by reordering).")
-
-        fixed.append(e2)
-
-    return np.array(fixed, dtype=int)
+tol = 1e-8
+itermax = 50
 
 
-# ============================================================
-#  Q4 bilinear element on [-1,1]x[-1,1]
-# ============================================================
+# =========================================================
+# Mesh (0-based)
+# =========================================================
+b = 0.3
+h = 0.3
+r = 0.1
 
-def gauss_1d_n3():
-    """3-point Gauss on [-1,1]."""
-    a = np.sqrt(3.0 / 5.0)
-    xi = np.array([-a, 0.0, a], dtype=float)
-    w  = np.array([5.0/9.0, 8.0/9.0, 5.0/9.0], dtype=float)
-    return xi, w
+dx = b / 3.0
+dy = h / 3.0
 
-def shape_Q4(xi, eta):
-    """
-    Node order on reference element:
-      1: (-1,-1), 2:(+1,-1), 3:(+1,+1), 4:(-1,+1)
-    """
-    N = np.array([
-        0.25*(1-xi)*(1-eta),
-        0.25*(1+xi)*(1-eta),
-        0.25*(1+xi)*(1+eta),
-        0.25*(1-xi)*(1+eta),
-    ], dtype=float)
+nodes = np.array([
+    [0.0, 0.0], [dx, 0.0], [2*dx, 0.0], [b, 0.0],
+    [0.0, dy],  [dx, dy],  [2*dx, dy],  [b, dy],
+    [0.0, 2*dy],[dx, 2*dy],[2*dx, 2*dy],
+    [b - r*np.sin(np.pi/6), h - r*np.cos(np.pi/6)],  # node 12 (idx 11)
+    [b, h - r],                                       # node 13 (idx 12)
+    [b - r*np.cos(np.pi/6), h - r*np.sin(np.pi/6)],   # node 14 (idx 13)
+    [0.0, h], [dx, h], [b/2, h], [b - r, h]           # 15..18 (idx 14..17)
+], dtype=float)
 
-    dNdxi = np.array([
-        -0.25*(1-eta),
-        +0.25*(1-eta),
-        +0.25*(1+eta),
-        -0.25*(1+eta),
-    ], dtype=float)
+elements = np.array([
+    [0, 1, 5, 4],
+    [1, 2, 6, 5],
+    [2, 3, 7, 6],
+    [4, 5, 9, 8],
+    [5, 6, 10, 9],
+    [6, 10, 13, 11],
+    [6, 7, 12, 11],
+    [8, 9, 15, 14],
+    [9, 10, 16, 15],
+    [10, 13, 17, 16]
+], dtype=int)
 
-    dNdeta = np.array([
-        -0.25*(1-xi),
-        -0.25*(1+xi),
-        +0.25*(1+xi),
-        +0.25*(1-xi),
-    ], dtype=float)
-
-    return N, dNdxi, dNdeta
+nnodes = nodes.shape[0]
 
 
-# ============================================================
-#  Nonlinear source: q(T) = c1 * exp(-c2/T)
-#  dq/dT = c1 * exp(-c2/T) * (c2/T^2)
-# ============================================================
-
-def qdot(T, c1, c2):
+# =========================================================
+# Nonlinear source
+# q(T) = c1 * exp(-c2/T)
+# dq/dT = c1 * exp(-c2/T) * (c2/T^2)
+# =========================================================
+def qdot(T):
     return c1 * np.exp(-c2 / T)
 
-def dqdot_dT(T, c1, c2):
+def dqdot_dT(T):
     return c1 * np.exp(-c2 / T) * (c2 / (T**2))
 
 
-# ============================================================
-#  Assembly: residual r(T) = K*T - f(T)
-#            Jacobian J(T) = K - df/dT
-# ============================================================
-
-def assemble_global(nodes, elements, T, lam, c1, c2):
-    nnode = nodes.shape[0]
-
-    if HAS_SCIPY:
-        K  = sp.lil_matrix((nnode, nnode), dtype=float)
-        dF = sp.lil_matrix((nnode, nnode), dtype=float)
-    else:
-        K  = np.zeros((nnode, nnode), dtype=float)
-        dF = np.zeros((nnode, nnode), dtype=float)
-
-    F = np.zeros(nnode, dtype=float)
-
-    xi_1d, w_1d = gauss_1d_n3()
-
-    for eidx, conn0 in enumerate(elements):
-        # ---- IMPORTANT: reorder to CCW (robust) ----
-        conn = fix_quad_order_by_angle(nodes, conn0)
-
-        xe = nodes[conn, 0]
-        ye = nodes[conn, 1]
-        Te = T[conn]
-
-        Ke  = np.zeros((4, 4), dtype=float)
-        Fe  = np.zeros(4, dtype=float)
-        dFe = np.zeros((4, 4), dtype=float)
-
-        for i, xi in enumerate(xi_1d):
-            for j, eta in enumerate(xi_1d):
-                wgt = w_1d[i] * w_1d[j]
-
-                N, dNdxi, dNdeta = shape_Q4(xi, eta)
-
-                # Jacobian mapping
-                J11 = np.dot(dNdxi,  xe)
-                J12 = np.dot(dNdxi,  ye)
-                J21 = np.dot(dNdeta, xe)
-                J22 = np.dot(dNdeta, ye)
-
-                detJ = J11*J22 - J12*J21
-                if detJ <= 1e-14:
-                    print("\n=== detJ failure ===")
-                    print("Element index:", eidx)
-                    print("Original conn:", np.array(conn0, dtype=int))
-                    print("Reordered conn:", conn)
-                    print("Coords:\n", nodes[conn])
-                    raise ValueError(f"Element has non-positive detJ={detJ}. This usually means the 4 chosen nodes do not form a valid quad.")
-
-                invJT = (1.0/detJ) * np.array([[ J22, -J21],
-                                               [-J12,  J11]], dtype=float)
-
-                dN = np.vstack((dNdxi, dNdeta)).T     # (4,2) in (xi,eta)
-                gradN = dN @ invJT                    # (4,2) in (x,y)
-
-                Tgp  = np.dot(N, Te)
-                qgp  = qdot(Tgp, c1, c2)
-                dqgp = dqdot_dT(Tgp, c1, c2)
-
-                Ke  += lam * (gradN @ gradN.T) * detJ * wgt
-                Fe  += (N * qgp) * detJ * wgt
-                dFe += (dqgp * np.outer(N, N)) * detJ * wgt
-
-        # assemble to global
-        for a in range(4):
-            A = conn[a]
-            F[A] += Fe[a]
-            for b in range(4):
-                B = conn[b]
-                if HAS_SCIPY:
-                    K[A, B]  += Ke[a, b]
-                    dF[A, B] += dFe[a, b]
-                else:
-                    K[A, B]  += Ke[a, b]
-                    dF[A, B] += dFe[a, b]
-
-    if HAS_SCIPY:
-        K = K.tocsr()
-        dF = dF.tocsr()
-        r = K @ T - F
-        J = K - dF
-        return J, r
-    else:
-        r = K @ T - F
-        J = K - dF
-        return J, r
+# =========================================================
+# IMPORTANT: Fix element orientation so detJ > 0 (at center)
+# This is the #1 reason for "too cold" results and Part B "already safe".
+# =========================================================
+def fix_element_orientation(nodes, elements):
+    fixed = elements.copy()
+    for eidx in range(fixed.shape[0]):
+        ele = fixed[eidx]
+        elenodes = nodes[ele, :]
+        _, detJ, _ = getJacobian(elenodes, 0.0, 0.0)  # check at element center
+        if detJ < 0:
+            # reverse order: [0,1,2,3] -> [0,3,2,1]
+            fixed[eidx] = ele[[0, 3, 2, 1]]
+    return fixed
 
 
-# ============================================================
-#  Dirichlet treatment for Newton system: J dT = -r
-# ============================================================
+# =========================================================
+# Element routine for Newton:
+# 给定一个单元当前的温度 Te，计算这个单元在 Newton 法里对应的 Jacobian 矩阵 Je 和残差向量 re
+# residual re(T) = Ke*Te - fe(T)
+# jacobian Je(T) = Ke - dfe/dT
+# =========================================================
+def eval_elem_newton(elenodes, Te, gpx, gpw):
+    Ke = np.zeros((4, 4), dtype=float) #单元刚度矩阵（线性的那一部分）
+    fe = np.zeros(4, dtype=float)      #非线性体热源向量
+    dfe = np.zeros((4, 4), dtype=float)
 
-def apply_dirichlet(J, rhs, dirichlet_nodes):
-    if HAS_SCIPY:
-        J = J.tolil()
-        for i in dirichlet_nodes:
-            J.rows[i] = [i]
-            J.data[i] = [1.0]
-            rhs[i] = 0.0
-        J = J.tocsr()
-        return J, rhs
-    else:
-        for i in dirichlet_nodes:
-            J[i, :] = 0.0
-            J[:, i] = 0.0
-            J[i, i] = 1.0
-            rhs[i] = 0.0
-        return J, rhs
+    ngp = gpw.shape[0]
+
+    for k in range(ngp):
+        xi, eta = gpx[k]
+        w = gpw[k]
+
+        N = linquadref(xi, eta)                 # (4,)
+        dN_ref = linquadderivref(xi, eta)       # (4,2)
+
+        J, detJ, invJ = getJacobian(elenodes, xi, eta)
+        if detJ <= 0:
+            raise ValueError(f"detJ <= 0 in element. Check element ordering. detJ={detJ}")
+
+        gradN = dN_ref @ invJ                   # (4,2)
+
+        # stiffness part: ∫ lam * gradNi·gradNj
+        Ke += lam * (gradN @ gradN.T) * detJ * w
+
+        # nonlinear load: ∫ Ni * q(T)
+        Tgp = float(N @ Te)
+        q = qdot(Tgp)
+        dq = dqdot_dT(Tgp)
+
+        fe += (N * q) * detJ * w
+        dfe += (dq * np.outer(N, N)) * detJ * w
+
+    re = Ke @ Te - fe
+    Je = Ke - dfe
+    return Je, re
 
 
-# ============================================================
-#  Newton solver
-# ============================================================
+# =========================================================
+# Solve nonlinear stationary for a given cooling temperature
+# 用 Newton方法解整个结构的非线性稳态温度场
+# 给定 T^k
+# 逐元素算 Ke, fe(T^k), dfe/dT
+# 组装全局 F(T^k) = K*T^k - f(T^k)
+# 组装 Jacobian J(T^k) = K - df/dT
+# 对固定温度节点施加 ΔT=0
+# 解 J ΔT = -F
+# T^{k+1} = T^k + ΔT
+# 重新强制 T = 边界温度
+# =========================================================
+def solve_for_Tcool(Tcool, elements, verbose=True):
 
-def newton_solve(nodes, elements, lam, c1, c2, dirichlet, T_init=None,
-                 tol=1e-8, itmax=50, verbose=True):
-    nnode = nodes.shape[0]
+    # initial guess: all 300 except Dirichlet nodes
+    T = np.full(nnodes, 300.0, dtype=float)
 
-    T = np.full(nnode, 300.0, dtype=float)
-    if T_init is not None:
-        T[:] = T_init
+    bottom_nodes = np.array([0, 1, 2, 3], dtype=int)          # y=0 -> 600K
+    notch_nodes  = np.array([11, 12, 13, 17], dtype=int)      # notch boundary -> Tcool
 
-    dir_nodes = np.array(sorted(dirichlet.keys()), dtype=int)
-    for i, val in dirichlet.items():
-        T[i] = float(val)
+    fixed_nodes = np.unique(np.hstack([bottom_nodes, notch_nodes]))
 
-    for k in range(itmax):
-        J, r = assemble_global(nodes, elements, T, lam, c1, c2)
+    T[bottom_nodes] = 600.0
+    T[notch_nodes]  = float(Tcool)
 
-        norm_r = np.linalg.norm(r, 2)
+    gpx = gx2dref(3)
+    gpw = gw2dref(3).flatten()
+
+    # dbc for Newton increment system: ΔT = 0 on fixed nodes
+    dbc_delta = np.column_stack([fixed_nodes, np.zeros_like(fixed_nodes, dtype=float)])
+
+    for it in range(itermax):
+
+        Jglob = np.zeros((nnodes, nnodes), dtype=float)
+        rglob = np.zeros(nnodes, dtype=float)
+
+        # assemble
+        for ele in elements:
+            elenodes = nodes[ele, :]
+            Te = T[ele]
+
+            Je, re = eval_elem_newton(elenodes, Te, gpx, gpw)
+
+            # IMPORTANT: re must be 1D (4,), not (4,1)
+            Jglob, rglob = assemble(Je, re, Jglob, rglob, ele)
+
+        res = np.linalg.norm(rglob, 2)
         if verbose:
-            print(f"Newton iter {k:02d}: ||r||2 = {norm_r:.3e}")
+            print(f"Newton {it:02d}: ||r||2 = {res:.3e}")
 
-        if norm_r < tol:
-            return T, k, norm_r
+        if res < tol:
+            break
 
-        rhs = -r.copy()
-        Jm, rhsm = apply_dirichlet(J, rhs, dir_nodes)
+        rhs = -rglob.copy()
+        Jm, rhsm = assignDBC(Jglob, rhs, dbc_delta)   # enforce ΔT=0 on fixed nodes
 
-        if HAS_SCIPY:
-            dT = spla.spsolve(Jm, rhsm)
-        else:
-            dT = np.linalg.solve(Jm, rhsm)
-
+        dT = np.linalg.solve(Jm, rhsm)
         T += dT
 
-        for i, val in dirichlet.items():
-            T[i] = float(val)
+        # re-enforce actual Dirichlet on T
+        T[bottom_nodes] = 600.0
+        T[notch_nodes]  = float(Tcool)
 
-    return T, itmax, np.linalg.norm(r, 2)
+    return T
 
 
-# ============================================================
-#  Plot
-# ============================================================
+# =========================================================
+# Main
+# =========================================================
+if __name__ == "__main__":
 
-def plot_temperature_3d(nodes, elements, T, title="Temperature distribution"):
-    # --- triangulate quads ---
-    tris = []
-    for e in elements:
-        a, b, c, d = e
-        tris.append([a, b, c])
-        tris.append([a, c, d])
-    tris = np.array(tris, dtype=int)
+    # Fix element ordering first (still 0-based, for FEM)
+    elements_fixed = fix_element_orientation(nodes, elements)
 
-    x = nodes[:, 0]
-    y = nodes[:, 1]
-    z = T
+    # -----------------------------------------------------
+    # Prepare elements for plotting (1-based!)
+    # -----------------------------------------------------
+    elements_plot = elements_fixed + 1
 
-    fig = plt.figure(figsize=(7, 5))
-    ax = fig.add_subplot(111, projection="3d")
+    print("=== Part A: nonlinear stationary with Tcool=300K ===")
+    T = solve_for_Tcool(300.0, elements_fixed, verbose=True)
 
-    # --- key: color by temperature ---
-    surf = ax.plot_trisurf(
-        x, y, z,
-        triangles=tris,
-        cmap="hot",          # 和答案一致（黑→红→黄）
-        vmin=300, vmax=600,  # 明确温度范围（非常重要）
-        linewidth=0.2,
-        antialiased=True
+    print("\nTemperatures at nodes 15-18:")
+    for idx in [14, 15, 16, 17]:
+        print(f"T{idx+1} = {T[idx]:.10f} K")
+
+    # ===== Plot for Part A (as in solution) =====
+    plot_temperature_trisurf_interp(
+        nodes,
+        elements_plot,
+        T,
+        Tmin=300,
+        Tmax=600,
+        title="Temperaturverteilung stationär nichtlinear"
     )
 
-    # --- colorbar ---
-    cbar = fig.colorbar(surf, ax=ax, shrink=0.65, pad=0.1)
-    cbar.set_label("T [K]")
-
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_zlabel("T [K]")
-    ax.set_title(title)
-
-    plt.tight_layout()
-    plt.show()
-
-
-
-# ============================================================
-#  Helper: find nodes on y=h
-# ============================================================
-
-def nodes_on_y(nodes, y_value, tol=1e-12):
-    return np.where(np.abs(nodes[:, 1] - y_value) < tol)[0]
-
-
-# ============================================================
-#  Example mesh (WARNING: your sheet connectivity near notch may differ)
-# ============================================================
-
-def build_example_mesh_b_h_r(b=0.3, h=0.3, r=0.1):
-    """
-    Node numbering exactly matches the provided figure (1..18).
-    In code we store nodes as 0-based array: node i -> index (i-1).
-
-    Special node coordinates from the sheet:
-      x12 = [b - r sin(pi/6), h - r cos(pi/6)]
-      x13 = [b, h - r]
-      x14 = [b - r cos(pi/6), h - r sin(pi/6)]
-      x17 = [b/2, h]
-      x18 = [b - r, h]
-
-    All other nodes lie on structured grid with spacing b/3 and h/3.
-    """
-    dx = b / 3.0
-    dy = h / 3.0
-
-    coords = {}
-
-    # --- structured grid nodes (as in the figure) ---
-    # y = 0: nodes 1..4
-    coords[1] = (0.0,   0.0)
-    coords[2] = (dx,    0.0)
-    coords[3] = (2*dx,  0.0)
-    coords[4] = (3*dx,  0.0)
-
-    # y = h/3: nodes 5..8
-    coords[5] = (0.0,   dy)
-    coords[6] = (dx,    dy)
-    coords[7] = (2*dx,  dy)
-    coords[8] = (3*dx,  dy)
-
-    # y = 2h/3: nodes 9..11 and 13
-    coords[9]  = (0.0,   2*dy)
-    coords[10] = (dx,    2*dy)
-    coords[11] = (2*dx,  2*dy)
-
-    # node 13 is special but lies at (b, h-r) which equals (b, 2h/3) here if r=0.1,h=0.3
-    coords[13] = (b, h - r)
-
-    # y = h: nodes 15,16,17,18 (17,18 special)
-    coords[15] = (0.0, h)
-    coords[16] = (dx,  h)
-
-    # --- special nodes (from sheet) ---
-    coords[12] = (b - r*np.sin(np.pi/6.0), h - r*np.cos(np.pi/6.0))
-    coords[14] = (b - r*np.cos(np.pi/6.0), h - r*np.sin(np.pi/6.0))
-    coords[17] = (b/2.0, h)
-    coords[18] = (b - r, h)
-
-    # build nodes array [0..17] corresponding to node IDs [1..18]
-    nodes = np.zeros((18, 2), dtype=float)
-    for nid in range(1, 19):
-        if nid not in coords:
-            raise ValueError(f"Missing coordinate for node {nid}. Check numbering vs figure.")
-        nodes[nid-1, :] = coords[nid]
-
-    return nodes
-
-
-def example_elements_connectivity():
-    """
-    Element connectivity written in 1-based node numbering
-    (exactly as in the sheet).
-    Internally converted to 0-based indices.
-    """
-    elems_1based = [
-        [1, 2, 6, 5],        # e1
-        [2, 3, 7, 6],        # e2
-        [3, 4, 8, 7],        # e3
-        [5, 6, 10, 9],       # e4
-        [6, 7, 11, 10],      # e5
-        [7, 11, 14, 12],     # e6
-        [7, 8, 13, 12],      # e7
-        [9, 10, 16, 15],     # e8
-        [10, 11, 17, 16],    # e9
-        [11, 14, 18, 17],    # e10
-    ]
-
-    # convert to 0-based for computation
-    elems_0based = [nids(*e) for e in elems_1based]
-    return np.array(elems_0based, dtype=int)
-
-
-
-def plot_mesh_2d(nodes, elements, title="Mesh connectivity (1-based)"):
-    plt.figure(figsize=(6,6))
-
-    # draw elements
-    for eidx, e in enumerate(elements, start=1):  # 元素从 1 开始编号
-        e = np.array(e, dtype=int)
-        pts = nodes[e, :]
-        pts2 = np.vstack([pts, pts[0]])
-        plt.plot(pts2[:,0], pts2[:,1], "-k", linewidth=1)
-
-        c = pts.mean(axis=0)
-        plt.text(c[0], c[1], f"e{eidx}", color="red", fontsize=10)
-
-    # draw node ids (1-based!)
-    for i, (x, y) in enumerate(nodes, start=1):
-        plt.text(x, y, str(i), color="blue", fontsize=9)
-
-    plt.gca().set_aspect("equal", adjustable="box")
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.title(title)
-    plt.grid(True)
-    plt.show()
-
-
-def element_min_detJ(nodes, elem):
-    xi_1d, _ = gauss_1d_n3()
-    conn = fix_quad_order_by_angle(nodes, elem)
-
-    xe = nodes[conn,0]
-    ye = nodes[conn,1]
-
-    min_detJ = 1e100
-    for xi in xi_1d:
-        for eta in xi_1d:
-            _, dNdxi, dNdeta = shape_Q4(xi, eta)
-            J11 = np.dot(dNdxi,  xe)
-            J12 = np.dot(dNdxi,  ye)
-            J21 = np.dot(dNdeta, xe)
-            J22 = np.dot(dNdeta, ye)
-            detJ = J11*J22 - J12*J21
-            min_detJ = min(min_detJ, detJ)
-    return min_detJ
-
-def print_detJ_report(nodes, elements):
-    report = []
-    for i, e in enumerate(elements):
-        dj = element_min_detJ(nodes, e)
-        report.append((i, dj, np.array(e, dtype=int)))
-
-    report.sort(key=lambda x: x[1])
-
-    print("\n=== detJ report (smallest first) ===")
-    for i, dj, e in report:
-        print(f"elem {i:02d}: min detJ = {dj:.3e}, conn = {e}")
-
-# ============================================================
-#  Run
-# ============================================================
-
-def main():
-    b = 0.3
-    h = 0.3
-    r = 0.1
-
-    lam = 48.0
-    c1  = 1e6
-    c2  = 1e3
-
-    nodes = build_example_mesh_b_h_r(b=b, h=h, r=r)
-    elements = example_elements_connectivity()
-
-    # ======================================================
-    # 🔴 STEP 1: 画 2D 网格（最重要）
-    # ======================================================
-    plot_mesh_2d(nodes, elements, title="Original mesh connectivity (before preprocess)")
-
-    # ======================================================
-    # 🔴 STEP 2: detJ 报告（预处理前）
-    # ======================================================
-    print_detJ_report(nodes, elements)
-
-    # ======================================================
-    # 🔴 STEP 3: 预处理（CCW + bow-tie 检测）
-    # ======================================================
-    elements = preprocess_elements(nodes, elements)
-
-    # ======================================================
-    # 🔴 STEP 4: 再画一次网格（确认）
-    # ======================================================
-    plot_mesh_2d(nodes, elements, title="Mesh connectivity AFTER preprocess")
-
-    print_detJ_report(nodes, elements)
-
-    # ======================================================
-    # Dirichlet BC
-    # ======================================================
-    bottom_nodes = nodes_on_y(nodes, 0.0, tol=1e-12)
-    bottom_nodes = nids(1, 2, 3, 4)          # y = 0
-    notch_nodes  = nids(12, 13, 14, 18)      # cooling boundary
-
-
-    def solve_for_Tcool(Tcool, verbose=False):
-        dirichlet = {int(i): 600.0 for i in bottom_nodes}
-        for i in notch_nodes:
-            dirichlet[int(i)] = float(Tcool)
-
-        Tsol, iters, res = newton_solve(
-            nodes, elements, lam, c1, c2,
-            dirichlet=dirichlet,
-            tol=1e-8, itmax=50, verbose=verbose
-        )
-        return Tsol
-
-    # ======================================================
-    # Part A
-    # ======================================================
-    T = solve_for_Tcool(300.0, verbose=True)
-
-    for nid_1 in [15, 16, 17, 18]:
-        print(f"T{nid_1} = {T[nid_1-1]:.10f} K")
-
-    plot_temperature_3d(nodes, elements, T,
-        title="Stationary nonlinear temperature (Tcool=300K)")
-
-    # ======================================================
-    # Part B
-    # ======================================================
-    top_nodes = nodes_on_y(nodes, h, tol=1e-12)
+    print("\n=== Part B: find T* so that max(T on y=h) <= 450K ===")
+    top_nodes = np.where(np.abs(nodes[:, 1] - h) < 1e-12)[0]
     Tk = 450.0
 
-    if np.max(T[top_nodes]) > Tk:
+    if np.max(T[top_nodes]) <= Tk:
+        print("Already safe at Tcool=300K.")
+        Tbest = T
+        Tcool_best = 300.0
+    else:
         Tbest = None
         Tcool_best = None
-        for trial in range(1, 200):
-            Tcool_trial = 300.0 - 10.0 * trial
-            Ttrial = solve_for_Tcool(Tcool_trial, verbose=False)
-            if np.max(Ttrial[top_nodes]) <= Tk:
-                Tbest = Ttrial
-                Tcool_best = Tcool_trial
+
+        for step in range(1, 200):
+            Tcool_try = 300.0 - 10.0 * step
+            Ttry = solve_for_Tcool(Tcool_try, elements_fixed, verbose=False)
+
+            if np.max(Ttry[top_nodes]) <= Tk:
+                Tbest = Ttry
+                Tcool_best = Tcool_try
                 break
 
         if Tbest is None:
-            raise RuntimeError("Could not find Tcool within the trial range.")
+            raise RuntimeError("Could not find safe Tcool within tried range.")
 
-        print(f"Found T* = {Tcool_best:.1f} K so that max(T on y=h) <= {Tk} K")
-    else:
-        print(f"Already safe: max(T on y=h) <= {Tk} K with Tcool=300 K")
-        Tbest = T
-        Tcool_best = 300.0
+        print(f"Found T* = {Tcool_best:.1f} K")
 
-    # ---- output node temperatures using 1-based numbering ----
-    for i in [15, 16, 17, 18]:
-        print(f"(safe) T{i} = {Tbest[nid(i)]:.10f} K")
+        print("Safe node temps 15-18:")
+        for idx in [14, 15, 16, 17]:
+            print(f"T{idx+1} = {Tbest[idx]:.10f} K")
 
-    plot_temperature_3d(
-        nodes, elements, Tbest,
-        title=f"Safe configuration (Tcool={Tcool_best:.0f}K)"
+    # ===== Plot for Part B (as in solution) =====
+    plot_temperature_trisurf_interp(
+        nodes,
+        elements_plot,
+        Tbest,
+        Tmin=250,
+        Tmax=600,
+        title=f"Temperaturverteilung stationär nichtlinear (T* = {int(Tcool_best)} K)"
     )
-
-
-if __name__ == "__main__":
-    main()

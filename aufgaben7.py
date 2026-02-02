@@ -1,3 +1,4 @@
+# #E1
 # import numpy as np
 # import matplotlib.pyplot as plt
 # import matplotlib.tri as mtri
@@ -5,28 +6,9 @@
 # from FktXVII import evaluate_stat
 # from FktXVIII import assemble
 # from FktXIX import assignDBC
-
-# # ----------------------------
-# # Gauss points/weights on [-1,1]
-# # ----------------------------
-# def gx2dref(n: int) -> np.ndarray:
-#     """2D Gauss points (tensor product), shape (n*n, 2): (xi, eta)."""
-#     x, _ = np.polynomial.legendre.leggauss(n)
-#     pts = []
-#     for eta in x:
-#         for xi in x:
-#             pts.append([xi, eta])
-#     return np.array(pts, dtype=float)
-
-# def gw2dref(n: int) -> np.ndarray:
-#     """2D Gauss weights (tensor product), shape (n*n,)."""
-#     _, w = np.polynomial.legendre.leggauss(n)
-#     W = []
-#     for j in range(n):
-#         for i in range(n):
-#             W.append(w[i] * w[j])
-#     return np.array(W, dtype=float)
-
+# from FktV import gx2dref
+# from FktVI import gw2dref
+# from Fkt_0 import plot_temperature_trisurf_interp
 
 # # ----------------------------
 # # helper: build mesh for the sheet
@@ -105,64 +87,6 @@
 #     return nodes, elements, dbc
 
 
-# # ----------------------------
-# # helper: 3D plot (split each quad into 2 triangles)
-# # ----------------------------
-# def plot_temperature_3d(nodes, elements, T):
-#     import matplotlib.pyplot as plt
-#     import matplotlib.tri as mtri
-#     from matplotlib import cm
-#     from matplotlib.colors import Normalize
-
-#     x = nodes[:, 0]
-#     y = nodes[:, 1]
-
-#     # split each quad into two triangles
-#     tris = []
-#     for ele in elements:
-#         n1, n2, n3, n4 = ele - 1
-#         tris.append([n1, n2, n3])
-#         tris.append([n1, n3, n4])
-
-#     tri = mtri.Triangulation(x, y, np.array(tris))
-
-#     # --- IMPORTANT PART ---
-#     Tmin = 300.0
-#     Tmax = 600.0
-#     norm = Normalize(vmin=Tmin, vmax=Tmax)
-#     cmap = cm.hot   # 和题目最接近（黑-红-黄）
-
-#     fig = plt.figure(figsize=(8, 6))
-#     ax = fig.add_subplot(111, projection="3d")
-
-#     surf = ax.plot_trisurf(
-#         tri,
-#         T,
-#         cmap=cmap,
-#         norm=norm,
-#         linewidth=0.3,
-#         edgecolor="k",
-#         antialiased=True
-#     )
-
-#     # colorbar with physical temperature values
-#     cbar = fig.colorbar(surf, ax=ax, shrink=0.6, pad=0.1)
-#     cbar.set_label("T [K]")
-#     cbar.set_ticks([300, 350, 400, 450, 500, 550, 600])
-
-#     ax.set_xlabel("x")
-#     ax.set_ylabel("y")
-#     ax.set_zlabel("T(x,y)")
-
-#     # view angle similar to solution sheet
-#     ax.view_init(elev=25, azim=-120)
-
-#     ax.set_title("Stationäre Temperaturverteilung (FEM)")
-#     plt.tight_layout()
-#     plt.show()
-
-
-
 # def main():
 #     # problem constants
 #     b = 0.3
@@ -184,8 +108,8 @@
 
 #     # loop over elements -> evaluate -> assemble
 #     for e in range(elements.shape[0]):
-#         ele = elements[e]                # 1-based
-#         elenodes = nodes[ele - 1, :]     # (4,2)
+#         ele = elements[e]                # 全局节点编号（1-based）
+#         elenodes = nodes[ele - 1, :]     # 这 4 个节点的坐标 (4,2)
 
 #         # Fkt XVII: element matrix/vector
 #         A_e, f_e = evaluate_stat(elenodes, gpx, gpw, lam=lam)
@@ -204,42 +128,33 @@
 #         print(f"T{nid} = {T[nid-1]:.12f} K")
 
 #     # 3D plot
-#     plot_temperature_3d(nodes, elements, T)
-
+#     # plot_temperature_3d(nodes, elements, T)
+#     plot_temperature_trisurf_interp(
+#         nodes,
+#         elements,
+#         T,
+#         Tmin=300,
+#         Tmax=600,
+#         nsub=6,   # 插值密度（5~8 很合适）
+#         title="Stationäre Temperaturverteilung (FEM, interpolated)",
+#     )
 
 
 # if __name__ == "__main__":
 #     main()
 
 
+
+# #E2
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.tri as mtri
+
 
 from FktXVII import evaluate_stat
 from FktXVIII import assemble
 from FktXIX import assignDBC
-
-
-# ============================================================
-# Gauss points / weights (2D tensor product)
-# ============================================================
-def gx2dref(n):
-    x, _ = np.polynomial.legendre.leggauss(n)
-    pts = []
-    for eta in x:
-        for xi in x:
-            pts.append([xi, eta])
-    return np.array(pts, dtype=float)
-
-
-def gw2dref(n):
-    _, w = np.polynomial.legendre.leggauss(n)
-    W = []
-    for j in range(n):
-        for i in range(n):
-            W.append(w[i] * w[j])
-    return np.array(W, dtype=float)
+from FktV import gx2dref
+from FktVI import gw2dref
+from Fkt_0 import plot_temperature_trisurf_interp
 
 
 # ============================================================
@@ -337,49 +252,6 @@ def solve_temperature(nodes, elements, dbc, lam):
     return T
 
 
-# ============================================================
-# 3D plot
-# ============================================================
-def plot_temperature_3d(nodes, elements, T):
-    from matplotlib.colors import Normalize
-    from matplotlib import cm
-
-    x = nodes[:, 0]
-    y = nodes[:, 1]
-
-    tris = []
-    for ele in elements:
-        n1, n2, n3, n4 = ele - 1
-        tris.append([n1, n2, n3])
-        tris.append([n1, n3, n4])
-
-    tri = mtri.Triangulation(x, y, np.array(tris))
-
-    fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection="3d")
-
-    surf = ax.plot_trisurf(
-        tri, T,
-        cmap=cm.hot,
-        norm=Normalize(vmin=300, vmax=600),
-        linewidth=0.3,
-        edgecolor="k",
-        antialiased=True
-    )
-
-    cbar = fig.colorbar(surf, ax=ax, shrink=0.6)
-    cbar.set_label("T [K]")
-    cbar.set_ticks([300, 350, 400, 450, 500, 550, 600])
-
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_zlabel("T(x,y)")
-    ax.view_init(elev=25, azim=-120)
-    ax.set_title("Stationäre Temperaturverteilung (FEM)")
-
-    plt.tight_layout()
-    plt.show()
-
 
 # ============================================================
 # MAIN PROGRAM
@@ -412,7 +284,15 @@ def main():
 
         if Tmax_top <= Tk:
             print(f"\n✅ Minimale sichere Ausnehmung: r* = {r:.2f} m\n")
-            plot_temperature_3d(nodes, elements, T)
+            plot_temperature_trisurf_interp(
+                nodes,
+                elements,
+                T,
+                Tmin=300,
+                Tmax=600,
+                nsub=6,   # 插值密度（5~8 很合适）
+                title="Stationäre Temperaturverteilung (FEM, interpolated)",
+            )
             break
 
         r += dr

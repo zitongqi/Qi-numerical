@@ -10,14 +10,14 @@ from BDF2 import BDF2
 
 
 def evaluate_instat(
-    elenodes,
-    gpx,
-    gpw,
-    elesol,
-    eleosol,
-    timInt_m,
-    timestep,
-    theta,
+    elenodes,     # (4×2) 当前单元的 4 个节点坐标
+    gpx,          # Gauss 点坐标 (ξ,η)
+    gpw,          # Gauss 权重
+    elesol,       # 当前时间层：T^n（4个节点）
+    eleosol,      # 上一时间层：T^{n-1}（4个节点）
+    timInt_m,     # 时间积分方法编号
+    timestep,     # Δt
+    theta,        # θ（仅 OST 用）
     firststep=None
 ):
     """
@@ -52,8 +52,8 @@ def evaluate_instat(
                 xi  = gpx[k, 0]
                 eta = gpx[k, 1]
 
-                deriv = linquadderivref(xi, eta)   # (4,2)
-                val   = linquadref(xi, eta)        # (4,)
+                deriv = linquadderivref(xi, eta)   # ∂N/∂ξ, ∂N/∂η(4,2)
+                val   = linquadref(xi, eta)        # N_i(ξ,η)(4,)
 
                 J, detJ, invJ = getJacobian(elenodes, xi, eta)
 

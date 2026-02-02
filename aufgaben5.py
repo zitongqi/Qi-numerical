@@ -84,22 +84,10 @@ import numpy as np
 from FktV import gx2dref
 from FktVI import gw2dref
 from FktVII import getxPos
+from FktVII import N_quad4
 from FktVIII import getJacobian
 
 
-# ============================================================
-# Bilineare Ansatzfunktionen (Q4)
-# ============================================================
-def N_quad4(xi, eta):
-    """
-    Rückgabewert:
-      N : numpy array (4,)
-    """
-    N1 = 0.25 * (1.0 - xi) * (1.0 - eta)
-    N2 = 0.25 * (1.0 + xi) * (1.0 - eta)
-    N3 = 0.25 * (1.0 + xi) * (1.0 + eta)
-    N4 = 0.25 * (1.0 - xi) * (1.0 + eta)
-    return np.array([N1, N2, N3, N4])
 
 
 # ============================================================

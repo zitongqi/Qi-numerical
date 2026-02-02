@@ -3,7 +3,7 @@ import numpy as np
 
 def assignDBC(sysmat, rhs, dbc):
     """
-    Fkt. XIX (Aufgabenblatt 7)
+    Fkt. XIX (Aufgabenblatt 7)将已知的节点温度直接替换
 
     sysmat : (N,N) global matrix A
     rhs    : (N,)  global vector f

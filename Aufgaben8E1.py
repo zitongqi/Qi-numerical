@@ -6,8 +6,7 @@ from gx2dref import gx2dref
 from gw2dref import gw2dref
 from assemble import assemble
 from assignDBC import assignDBC
-from quadplot import quadplot
-
+from Fkt_0 import plot_temperature_trisurf_interp
 # -------------------------------------------------
 # parameters
 # -------------------------------------------------
@@ -146,4 +145,14 @@ print(f"T17 = {T[16, -1]:.6f}")
 print(f"T18 = {T[17, -1]:.6f}")
 
 # plot temperature field
-quadplot(nodes, elements, T[:, -1])
+plot_temperature_trisurf_interp(
+    nodes,
+    elements + 1,          # ⚠️ 关键：转回 1-based
+    T[:, -1],
+    Tmin=300,
+    Tmax=600,
+    nsub=6,
+    title="Temperature at t = 5000 s (OST, Δt = 500 s)",
+    cmap="hot",
+    view=(25, -120),
+)

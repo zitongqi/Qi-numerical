@@ -1,53 +1,60 @@
 # evaluate_stat.py
 import numpy as np
 
+from linquadref import linquadref
+from linquadderivref import linquadderivref
+from getJacobian import getJacobian
+
+
 def evaluate_stat(elenodes, gpx, gpw, lam=48.0):
     """
     Fkt. XVII (Aufgabenblatt 7)
+    Stationary heat conduction (Q1 element)
 
-    elenodes : (4,2) array-like
-               element node coordinates [[x,y],...]
-    gpx      : (ngp,2) array-like
-               Gauss points (xi, eta) on reference element
-    gpw      : (ngp,)  array-like
-               Gauss weights (already 2D weights)
-    lam      : float
-               thermal conductivity λ (default: 48.0)
+    elenodes : (4,2) array
+        Element node coordinates
+    gpx : (ngp,2) array
+        Gauss points (xi, eta) on reference element
+    gpw : (ngp,) array
+        Gauss weights (2D tensor product)
+    lam : float
+        Thermal conductivity
 
-    Returns:
-      elemat : (4,4) element matrix A^(e)
-      elevec : (4,)  element vector f^(e) (zero here)
+    Returns
+    -------
+    elemat : (4,4) ndarray
+        Element stiffness matrix
+    elevec : (4,) ndarray
+        Element load vector (zero)
     """
+
     elenodes = np.asarray(elenodes, dtype=float)
     gpx = np.asarray(gpx, dtype=float)
     gpw = np.asarray(gpw, dtype=float)
 
     elemat = np.zeros((4, 4), dtype=float)
-    elevec = np.zeros(4, dtype=float)  # q̇ = 0 → no source term
+    elevec = np.zeros(4, dtype=float)   # no source term
 
-    # loop over Gauss points
-    for k in range(len(gpw)):
+    ngp = gpw.shape[0]
+
+    # -------------------------------------------------
+    # Gauss integration
+    # -------------------------------------------------
+    for k in range(ngp):
         xi, eta = gpx[k]
         w = gpw[k]
 
-        # bilinear shape function derivatives on reference element
-        dN_dxi = np.array([
-            [-(1.0 - eta), -(1.0 - xi)],
-            [ +(1.0 - eta), -(1.0 + xi)],
-            [ +(1.0 + eta), +(1.0 + xi)],
-            [-(1.0 + eta), +(1.0 - xi)],
-        ], dtype=float) * 0.25
+        # shape function derivatives on reference element
+        dN_dxi = linquadderivref(xi, eta)   # (4,2)
 
-        # Jacobian
-        J = dN_dxi.T @ elenodes
-        detJ = np.linalg.det(J)
-        invJ = np.linalg.inv(J)
+        # Jacobian and inverse
+        J, detJ, invJ = getJacobian(elenodes, xi, eta)
 
         # gradients in physical coordinates
-        # ∇_x N = J^{-T} ∇_ξ N
-        gradN = dN_dxi @ invJ.T   # (4,2)
+        # grad N = dN/dxi * invJ
+        gradN = dN_dxi @ invJ   # (4,2)
 
-        # assemble element stiffness matrix
+        # assemble stiffness matrix
         for i in range(4):
             for j in range(4):
                 elemat[i, j] += (

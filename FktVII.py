@@ -3,7 +3,7 @@
 # =========================
 import numpy as np
 
-def _N_quad4(xi: float, eta: float) -> np.ndarray:
+def N_quad4(xi: float, eta: float) -> np.ndarray:
     """
     Bilineare Ansatzfunktionen (Q4) auf [-1,1]x[-1,1]
     Knotenreihenfolge:
@@ -29,7 +29,7 @@ def getxPos(nodes, xi: float, eta: float) -> np.ndarray:
     if nodes.shape != (4, 2):
         raise ValueError("getxPos: 'nodes' must have shape (4,2)")
 
-    N = _N_quad4(xi, eta)  # (4,)
+    N = N_quad4(xi, eta)  # (4,)
     x = float(np.dot(N, nodes[:, 0]))
     y = float(np.dot(N, nodes[:, 1]))
     return np.array([[x], [y]], dtype=float)
